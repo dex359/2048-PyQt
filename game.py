@@ -46,7 +46,8 @@ class Tile(QtCore.QObject):
 
         self.cell_color = QtGui.QColor("#" + cfg.get("Appearance", "color.%s" % value if value <= 2048 else 2048))
         self.text_color = QtGui.QColor("#" + cfg.get("Appearance", "color.text.dark"))
-        if value > 4: self.text_color = QtGui.QColor("#" + cfg.get("Appearance", "color.text.light"))
+        if value > 4:
+            self.text_color = QtGui.QColor("#" + cfg.get("Appearance", "color.text.light"))
         self.pen = QtGui.QPen(QtCore.Qt.SolidLine)
         self.brush = QtGui.QBrush(self.cell_color)
         self.font = QtGui.QFont()
@@ -118,20 +119,19 @@ class Matrix:
         self.tl = 37.5                            # target tile length
         self.sp = 4                               # space beetwen tiles
         self.modified = False                     # merge anchor
+        self.save_loaded = False
         save = cfg.get("Game", "save")
         self.fill(list(map(int, save.split(" "))) if save else None)
-        self.score = int(cfg.get("Game", "score"))
-        self.highscore = int(cfg.get("Game", "highscore"))
-        self.previous_matrix = None
-        self.previous_score = 0
 
     def update(self):
         self.tl = (150.0 / self.grid) * self.sf       # length of tile side
         self.sp = (20.0 / (self.grid + 1)) * self.sf  # space beetwen tiles
         for row in range(self.grid):
             for cell in range(self.grid):
+                # update 'position' value for every cell on grid
                 self.data[row][cell]['position'] = QtCore.QPoint(int(20 * self.sf + (cell + 1) * self.sp + cell * self.tl),
                                                                  int(130 * self.sf + (row + 1) * self.sp + row * self.tl))
+                # update geometry for existing tiles
                 if self.data[row][cell]['data'][0]:
                     self.data[row][cell]['data'][0].setGeometry(QtCore.QRect(self.data[row][cell]['position'].x(),
                                                                              self.data[row][cell]['position'].y(),
@@ -148,6 +148,7 @@ class Matrix:
         # create source
         if defaults and len(defaults) == self.grid ** 2:
             src = defaults
+            self.save_loaded = True
         else:
             src = [0 for index in range(self.grid ** 2)]
         # fill
@@ -165,16 +166,18 @@ class Matrix:
                     res.append(cell['data'][0])
                     if len(cell['data']) > 1:
                         res.append(cell['data'][1])
-
         return res
 
-    def spawn(self):
-        empty = []
+    def find_empty_cells(self):
+        res = []
         for row in range(self.grid):
             for cell in range(self.grid):
                 if self.data[row][cell]['data'][0] == 0:
-                    empty.append((row, cell))
-        row, cell = random.choice(empty)
+                    res.append((row, cell))
+        return res
+
+    def spawn(self):
+        row, cell = random.choice(self.find_empty_cells())
         tile = Tile(self, 4 if random.randrange(99) > 89 else 2)
         tile.setGeometry(QtCore.QRect(self.data[row][cell]['position'].x(),
                                       self.data[row][cell]['position'].y(),
@@ -187,9 +190,9 @@ class Matrix:
             for cell in row:
                 if len(cell['data']) > 1:
                     score = cell['data'][0].value + cell['data'][1].value
-                    self.score += score
-                    if self.score > self.highscore:
-                        self.highscore = self.score
+                    self.parent.score += score
+                    if self.parent.score > self.parent.highscore:
+                        self.parent.highscore = self.parent.score
                     new_tile = Tile(self, score)
                     new_tile.setGeometry(QtCore.QRect(cell['position'].x(),
                                                       cell['position'].y(),
@@ -198,7 +201,6 @@ class Matrix:
                     new_tile.splash()
 
     def merge(self):
-        self.modified = False
         for row in range(self.grid):
             for cell in range(self.grid):
                 if self.data[row][cell]['data'][0]:
@@ -251,77 +253,108 @@ class Matrix:
                 data[cell].insert(0, self.data[row][cell])
         self.data = data
 
-    def __str__(self):
-        data = []
+    def backup(self):
+        res = []
+        for row in range(self.grid):
+            res.append([])
+            for cell in range(self.grid):
+                res[row].append({})
+                res[row][cell]['data'] = self.data[row][cell]['data'].copy()
+        return res
+
+    def check_state(self):
+        # if empty cells exists check passed
+        if len(self.find_empty_cells()) > 0:
+            return True
+        # horizontal check cells for identity
+        for row in range(self.grid):
+            for cell in range(self.grid):
+                if cell:
+                    if self.data[row][cell]['data'][0].value == self.data[row][cell - 1]['data'][0].value:
+                        return True
+        # vertical check cells for identity
+        for row in range(self.grid):
+            for cell in range(self.grid):
+                if row:
+                    if self.data[row][cell]['data'][0].value == self.data[row - 1][cell]['data'][0].value:
+                        return True
+        # result if check not passed
+        return False
+
+    def find_2048(self):
         for row in self.data:
-            new_row = []
             for cell in row:
-                new_row.append([str(item) for item in cell['data']])
-            data.append(str(new_row))
-        return "\n".join(data)
+                if cell['data'][0] != 0:
+                    if cell['data'][0].value == 2048:
+                        return True
+        return False
 
 
 class Canvas(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super(Canvas, self).__init__(parent)
+        self.sf = 1
+        self.parent = parent
         self.matrix = parent.matrix
         self.painter = QtGui.QPainter()
-        self.sf = 1
         self.new_button = QtWidgets.QPushButton(cfg.get("Locale", "new"), self)
         self.new_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.new_button.clicked.connect(parent.newGame)
+        self.new_button.clicked.connect(parent.new_game)
         self.undo_button = QtWidgets.QPushButton(cfg.get("Locale", "undo"), self)
         self.undo_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self.undo_button.clicked.connect(parent.undo)
 
     def paintEvent(self, event):
+        # open painter
         self.painter.begin(self)
-        self.painter.setRenderHints(QtGui.QPainter.Antialiasing |
-                                    QtGui.QPainter.TextAntialiasing)
+        self.painter.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.TextAntialiasing)
+        # draw title
         self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.text.dark")))
         font = QtGui.QFont()
         font.setPixelSize(int(self.sf * 30))
         self.painter.setFont(font)
-        self.painter.drawText(int(self.sf * 20), int(self.sf * 43), cfg.get("Locale", "subtitle"))
+        self.painter.drawText(int(self.sf * 20), int(self.sf * 45), cfg.get("Locale", "subtitle"))
+        # draw help line
         font.setPixelSize(int(self.sf * 9))
         self.painter.setFont(font)
-        self.painter.drawText(int(self.sf * 20), int(self.sf * 70), cfg.get("Locale", "help"))
-
-        st = " %s\n%s" % (cfg.get("Locale", "score"), self.matrix.score)
-        hst = " %s\n%s" % (cfg.get("Locale", "best"), self.matrix.highscore)
+        text_line_rect = QtCore.QRect(int(self.sf * 20), int(self.sf * 65), int(self.sf * 170), int(self.sf * 20))
+        if self.parent.state == "win":
+            self.painter.drawText(text_line_rect, QtCore.Qt.AlignHCenter, cfg.get("Locale", "win"))
+        elif self.parent.state == "lose":
+            self.painter.drawText(text_line_rect, QtCore.Qt.AlignHCenter, cfg.get("Locale", "lose"))
+        else:
+            self.painter.drawText(text_line_rect, QtCore.Qt.AlignHCenter, cfg.get("Locale", "help"))
+        # draw score and best
+        st = " %s\n%s" % (cfg.get("Locale", "score"), self.parent.score)
+        hst = " %s\n%s" % (cfg.get("Locale", "best"), self.parent.highscore)
         font.setPixelSize(int(self.sf * 10))
         self.painter.setFont(font)
         sbr = self.painter.boundingRect(self.geometry(), QtCore.Qt.TextWordWrap, st)
         hsbr = self.painter.boundingRect(self.geometry(), QtCore.Qt.TextWordWrap, hst)
-        pen = QtGui.QPen(QtCore.Qt.SolidLine)
-        pen.setColor(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
-        brush = QtGui.QBrush(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
         sr = QtCore.QRect(int(self.sf * 180) - sbr.width() - hsbr.width() - int((15 * self.sf)),
-                          int(self.sf * 20), sbr.width() + int(self.sf * 10), sbr.height() + int(self.sf * 6))
-        hsr = QtCore.QRect(int(self.sf * 180) - hsbr.width(), int(self.sf * 20), hsbr.width() + int(self.sf * 10), hsbr.height() + int(self.sf * 6))
-        self.painter.setPen(pen)
-        self.painter.setBrush(brush)
+                          int(self.sf * 20),
+                          sbr.width() + int(self.sf * 10),
+                          sbr.height() + int(self.sf * 6))
+        hsr = QtCore.QRect(int(self.sf * 180) - hsbr.width(),
+                           int(self.sf * 20),
+                           hsbr.width() + int(self.sf * 10),
+                           hsbr.height() + int(self.sf * 6))
+        self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
+        self.painter.setBrush(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
         self.painter.drawRoundedRect(sr, int(self.sf * 3), int(self.sf * 3), QtCore.Qt.AbsoluteSize)
         self.painter.drawRoundedRect(hsr, int(self.sf * 3), int(self.sf * 3), QtCore.Qt.AbsoluteSize)
-        pen.setColor(QtGui.QColor("#" + cfg.get("Appearance", "color.background")))
-        self.painter.setPen(pen)
+        self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.background")))
         self.painter.drawText(sr, QtCore.Qt.AlignVCenter|QtCore.Qt.AlignHCenter, st)
         self.painter.drawText(hsr, QtCore.Qt.AlignVCenter|QtCore.Qt.AlignHCenter, hst)
-
-        pen = QtGui.QPen()
-        pen.setStyle(QtCore.Qt.SolidLine)
-        pen.setColor(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
-        brush = QtGui.QBrush(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
-        self.painter.setPen(pen)
-        self.painter.setBrush(brush)
-        self.painter.drawRoundedRect(int(self.sf * 20), int(self.sf * 130), int(self.sf * 170), int(self.sf * 170),
-                                     int(self.sf * 3), int(self.sf * 3),
-                                     QtCore.Qt.AbsoluteSize)
-        pen.setColor(QtGui.QColor("#" + cfg.get("Appearance", "color.cell")))
-        brush.setColor(QtGui.QColor("#" + cfg.get("Appearance", "color.cell")))
-        self.painter.setPen(pen)
-        self.painter.setBrush(brush)
+        # draw boundary of the playing field
+        self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
+        self.painter.setBrush(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
+        playfield = QtCore.QRect(int(self.sf * 20), int(self.sf * 130), int(self.sf * 170), int(self.sf * 170))
+        self.painter.drawRoundedRect(playfield, int(self.sf * 3), int(self.sf * 3), QtCore.Qt.AbsoluteSize)
+        # draw grid of playing field
+        self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.cell")))
+        self.painter.setBrush(QtGui.QColor("#" + cfg.get("Appearance", "color.cell")))
         ln, sp = 150.0 / self.matrix.grid, 20.0 / (self.matrix.grid + 1)
         for y in range(self.matrix.grid):
             for x in range(self.matrix.grid):
@@ -331,8 +364,15 @@ class Canvas(QtWidgets.QWidget):
                                              int(self.sf * ln),
                                              int(self.sf * 3), int(self.sf * 3),
                                              QtCore.Qt.AbsoluteSize)
+        # draw all existing tiles
         for tile in self.matrix.to_render():
             tile.render(self.painter)
+        # draw shadow if state is 'lose'
+        if self.parent.state == 'lose':
+            self.painter.setPen(QtGui.QColor(187, 173, 160, 100))
+            self.painter.setBrush(QtGui.QColor(187, 173, 160, 100))
+            self.painter.drawRoundedRect(playfield, int(self.sf * 3), int(self.sf * 3), QtCore.Qt.AbsoluteSize)
+        # close painter
         self.painter.end()
 
     def resizeEvent(self, ev):
@@ -364,23 +404,32 @@ class Main(QtWidgets.QWidget):
         self.setMinimumSize(int(cfg.get("Appearance", "min.width")), int(cfg.get("Appearance", "min.height")))
         self.resize(int(cfg.get("Window", "width")), int(cfg.get("Window", "height")))
         center_point = QtWidgets.QDesktopWidget().availableGeometry().center()
-        qtRect = self.geometry()
-        qtRect.moveCenter(center_point)
-        self.move(qtRect.topLeft())
+        qtrect = self.geometry()
+        qtrect.moveCenter(center_point)
+        self.move(qtrect.topLeft())
         self.setWindowTitle(cfg.get("Locale", "title"))
         self.setAutoFillBackground(True)
         pallete = self.palette()
         pallete.setColor(self.backgroundRole(), QtGui.QColor("#" + cfg.get("Appearance", "color.background")))
         self.setPalette(pallete)
+        self.state = "playing"
+        self.score = int(cfg.get("Game", "score"))
+        self.highscore = int(cfg.get("Game", "highscore"))
+        self.previous_score = 0
+        self.previous_matrix = None
         self.matrix = Matrix(self)
         self.canvas = Canvas(self)
         self.show()
-        self.matrix.spawn()
+        if not self.matrix.save_loaded:
+            self.matrix.spawn()
 
     def keyPressEvent(self, event):
+        if self.state == "lose":
+            return
         if not event.isAutoRepeat():
-            self.matrix.previous_matrix = self.matrix.data.copy()
-            self.matrix.previous_score = self.matrix.score
+            self.matrix.modified = False
+            self.previous_matrix = self.matrix.backup()
+            self.previous_score = self.score
             if event.key() == QtCore.Qt.Key_Left:
                 self.matrix.merge()
             elif event.key() == QtCore.Qt.Key_Up:
@@ -398,18 +447,27 @@ class Main(QtWidgets.QWidget):
             if self.matrix.modified:
                 self.matrix.collect()
                 self.matrix.spawn()
+                if self.matrix.check_state() is False:
+                    self.state = "lose"
+                    self.update()
+                if self.matrix.find_2048():
+                    self.state = "win"
+                    self.update()
 
-    def newGame(self):
+    def new_game(self):
+        self.score = 0
+        self.state = "playing"
         self.matrix.fill()
         self.matrix.update()
-        self.matrix.score = 0
-        self.update()
         self.matrix.spawn()
 
     def undo(self):
-        if self.matrix.previous_matrix:
-            self.matrix.data = self.matrix.previous_matrix
-            self.matrix.score = self.matrix.previous_score
+        if self.previous_matrix:
+            self.matrix.data = self.previous_matrix
+            self.score = self.previous_score
+            self.previous_matrix = None
+            if self.state == "lose" or self.state == "win" and self.matrix.find_2048() is False:
+                self.state = "playing"
             self.matrix.update()
             self.update()
 
@@ -433,15 +491,19 @@ class Main(QtWidgets.QWidget):
 
     def closeEvent(self, event):
         data = []
+        tiles_count = 0
         for row in self.matrix.data:
             for cell in row:
                 if cell['data'][0] == 0:
                     data.append(0)
                 else:
                     data.append(cell['data'][0].value)
+                    tiles_count += 1
+        if tiles_count == 1:
+            data = []
         cfg.set("Game", "save", " ".join(map(str, data)))
-        cfg.set("Game", "score", str(self.matrix.score))
-        cfg.set("Game", "highscore", str(self.matrix.highscore))
+        cfg.set("Game", "score", str(self.score))
+        cfg.set("Game", "highscore", str(self.highscore))
         cfg.set("Window", "width", str(self.canvas.width()))
         cfg.set("Window", "height", str(self.canvas.height()))
         with open('settings.ini', 'w') as target:
@@ -452,5 +514,4 @@ class Main(QtWidgets.QWidget):
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     game = Main()
-    app.exec_()
-    sys.exit()
+    sys.exit(app.exec_())
