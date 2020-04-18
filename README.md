@@ -1,7 +1,7 @@
 # 2048-PyQt
-Based on popular game [2048](https://github.com/gabrielecirulli/2048) by Gabriele Cirulli.
-The game's objective is to slide numbered tiles on a grid to combine them to create a tile with 
-the number 2048. Here is Python version that uses PyQt5.  
+Based on popular game [2048](https://github.com/gabrielecirulli/2048) by Gabriele 
+Cirulli. The game's objective is to slide numbered tiles on a grid to combine 
+them to create a tile with the number 2048. Here is Python version that uses PyQt5.  
 
 ![screenshot](screenshot.png)  
 
