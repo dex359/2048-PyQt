@@ -16,6 +16,7 @@
 
 # import standard
 import sys
+import time
 import random
 import configparser
 
@@ -43,13 +44,10 @@ class Tile(QtCore.QObject):
         self.spawn_animation.setDuration(int(cfg.get("Appearance", "time.animations")))
         self.splash_animation = QtCore.QPropertyAnimation(self, b'geometry')
         self.splash_animation.setDuration(int(cfg.get("Appearance", "time.animations")))
-
         self.cell_color = QtGui.QColor("#" + cfg.get("Appearance", "color.%s" % value if value <= 2048 else 2048))
         self.text_color = QtGui.QColor("#" + cfg.get("Appearance", "color.text.dark"))
         if value > 4:
             self.text_color = QtGui.QColor("#" + cfg.get("Appearance", "color.text.light"))
-        self.pen = QtGui.QPen(QtCore.Qt.SolidLine)
-        self.brush = QtGui.QBrush(self.cell_color)
         self.font = QtGui.QFont()
 
     def setGeometry(self, rect: QtCore.QRect):
@@ -69,15 +67,13 @@ class Tile(QtCore.QObject):
                                 self._height)
 
     def render(self, painter):
-        self.pen.setColor(self.cell_color)
-        painter.setPen(self.pen)
-        painter.setBrush(self.brush)
+        painter.setPen(self.cell_color)
+        painter.setBrush(self.cell_color)
         painter.drawRoundedRect(self.getGeometry(),
                                 self.matrix.sf * 3,
                                 self.matrix.sf * 3,
                                 QtCore.Qt.AbsoluteSize)
-        self.pen.setColor(self.text_color)
-        painter.setPen(self.pen)
+        painter.setPen(self.text_color)
         pixel_size = int(16 * self.matrix.sf * (self._width/self.matrix.tl))
         self.font.setPixelSize(pixel_size if pixel_size else 1)
         painter.setFont(self.font)
@@ -92,9 +88,10 @@ class Tile(QtCore.QObject):
 
     def splash(self):
         self.splash_animation.setStartValue(self.getGeometry())
-        self.splash_animation.setKeyValueAt(0.5, QtCore.QRect(self._x, self._y,
-                                                       int(self._width + 5 * self.matrix.sf),
-                                                       int(self._height + 5 * self.matrix.sf)))
+        self.splash_animation.setKeyValueAt(0.5, QtCore.QRect(self._x,
+                                                              self._y,
+                                                              int(self._width + 7 * self.matrix.sf),
+                                                              int(self._height + 7 * self.matrix.sf)))
         self.splash_animation.setEndValue(self.getGeometry())
         self.splash_animation.start()
 
@@ -106,20 +103,21 @@ class Tile(QtCore.QObject):
     def __str__(self):
         return str(self.value)
 
+    # noinspection PyUnresolvedReferences
     geometry = QtCore.pyqtProperty(QtCore.QRect, fset=setGeometry)
 
 
 class Matrix:
 
     def __init__(self, parent):
-        self.parent = parent                      # parent link for tiles updating
-        self.data = []                            # tiles and coords massive
-        self.grid = int(cfg.get("Game", "grid"))  # grid resolution
-        self.sf = 1                               # current scale factor
-        self.tl = 37.5                            # target tile length
-        self.sp = 4                               # space beetwen tiles
-        self.modified = False                     # merge anchor
-        self.save_loaded = False
+        self.parent = parent                         # parent link for tiles updating
+        self.data = []                               # tiles and coords massive
+        self.grid = int(cfg.get("Game", "grid"))     # grid resolution
+        self.sf = 1                                  # current scale factor
+        self.tl = 37.5                               # target tile length
+        self.sp = 4                                  # space beetwen tiles
+        self.modified = False                        # modified anchor
+        self.save_loaded = False                     # loading progress anchor
         save = cfg.get("Game", "save")
         self.fill(list(map(int, save.split(" "))) if save else None)
 
@@ -129,14 +127,12 @@ class Matrix:
         for row in range(self.grid):
             for cell in range(self.grid):
                 # update 'position' value for every cell on grid
-                self.data[row][cell]['position'] = QtCore.QPoint(int(20 * self.sf + (cell + 1) * self.sp + cell * self.tl),
-                                                                 int(130 * self.sf + (row + 1) * self.sp + row * self.tl))
+                x = int(20 * self.sf + (cell + 1) * self.sp + cell * self.tl)
+                y = int(130 * self.sf + (row + 1) * self.sp + row * self.tl)
+                self.data[row][cell]['position'] = QtCore.QPoint(x, y)
                 # update geometry for existing tiles
                 if self.data[row][cell]['data'][0]:
-                    self.data[row][cell]['data'][0].setGeometry(QtCore.QRect(self.data[row][cell]['position'].x(),
-                                                                             self.data[row][cell]['position'].y(),
-                                                                             int(self.tl),
-                                                                             int(self.tl)))
+                    self.data[row][cell]['data'][0].setGeometry(QtCore.QRect(x, y, int(self.tl), int(self.tl)))
 
     def fill(self, defaults=None):
         # create empty
@@ -150,7 +146,7 @@ class Matrix:
             src = defaults
             self.save_loaded = True
         else:
-            src = [0 for index in range(self.grid ** 2)]
+            src = [0 for x in range(self.grid ** 2)]
         # fill
         counter = 0
         for row in self.data:
@@ -200,35 +196,33 @@ class Matrix:
                     cell['data'] = [new_tile]
                     new_tile.splash()
 
+    def shift_tile_left(self, r, c):
+        if c == 0 or len(self.data[r][c - 1]['data']) > 1:
+            return r, c
+        if self.data[r][c - 1]['data'][0] == 0:
+            self.data[r][c - 1]['data'] = self.data[r][c]['data']
+            self.data[r][c]['data'] = [0]
+            return self.shift_tile_left(r, c - 1)
+        if self.data[r][c - 1]['data'][0].value == self.data[r][c]['data'][0].value:
+            self.data[r][c - 1]['data'].append(self.data[r][c]['data'][0])
+            self.data[r][c]['data'] = [0]
+            return r, c - 1
+        return r, c
+
     def merge(self):
-        for row in range(self.grid):
-            for cell in range(self.grid):
-                if self.data[row][cell]['data'][0]:
-                    src = self.data[row][cell]['data']
-                    tile = src[0]
-                    target = None
-                    for tc in range(cell):
-                        if len(self.data[row][:cell][- tc - 1]['data']) > 1:
-                            continue
-                        if self.data[row][:cell][- tc - 1]['data'][0] == 0:
-                            self.data[row][:cell][- tc - 1]['data'] = [src[0]]
-                            target = self.data[row][:cell][- tc - 1]['position']
-                            del src[0]
-                            src.append(0)
-                            src = self.data[row][:cell][- tc - 1]['data']
-                            self.modified = True
-                        elif self.data[row][:cell][- tc - 1]['data'][0].value == src[0].value:
-                            self.data[row][:cell][- tc - 1]['data'].append(src[0])
-                            target = self.data[row][:cell][- tc - 1]['position']
-                            del src[0]
-                            src.append(0)
-                            src = self.data[row][:cell][- tc - 1]['data']
-                            self.modified = True
-                            break
-                        else:
-                            break
-                    if target:
-                        src[-1].move(target)
+        start_anim_time = None
+        for r in range(self.grid):
+            for c in range(self.grid):
+                if self.data[r][c]['data'][0] != 0:
+                    tile = self.data[r][c]['data'][0]
+                    nr, nc = self.shift_tile_left(r, c)
+                    if nc != c:
+                        tile.move(self.data[nr][nc]['position'])
+                        self.modified = True
+                        start_anim_time = time.time()
+        if start_anim_time:
+            while time.time() - start_anim_time < int(cfg.get("Appearance", "time.animations")) / 1000:
+                self.parent.update()
 
     def reverse(self):
         data = []
@@ -304,6 +298,8 @@ class Canvas(QtWidgets.QWidget):
         self.undo_button = QtWidgets.QPushButton(cfg.get("Locale", "undo"), self)
         self.undo_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self.undo_button.clicked.connect(parent.undo)
+        with open('buttons.css', 'r') as css:
+            self.buttons_style = css.read()
 
     def paintEvent(self, event):
         # open painter
@@ -345,8 +341,8 @@ class Canvas(QtWidgets.QWidget):
         self.painter.drawRoundedRect(sr, int(self.sf * 3), int(self.sf * 3), QtCore.Qt.AbsoluteSize)
         self.painter.drawRoundedRect(hsr, int(self.sf * 3), int(self.sf * 3), QtCore.Qt.AbsoluteSize)
         self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.background")))
-        self.painter.drawText(sr, QtCore.Qt.AlignVCenter|QtCore.Qt.AlignHCenter, st)
-        self.painter.drawText(hsr, QtCore.Qt.AlignVCenter|QtCore.Qt.AlignHCenter, hst)
+        self.painter.drawText(sr, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignHCenter, st)
+        self.painter.drawText(hsr, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignHCenter, hst)
         # draw boundary of the playing field
         self.painter.setPen(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
         self.painter.setBrush(QtGui.QColor("#" + cfg.get("Appearance", "color.grid")))
@@ -382,17 +378,11 @@ class Canvas(QtWidgets.QWidget):
         self.matrix.update()
         self.new_button.setGeometry(int(20 * sf), int(88 * sf), int(75 * sf), int(25 * sf))
         self.undo_button.setGeometry(int(115 * sf), int(88 * sf), int(75 * sf), int(25 * sf))
-        dynamic_style = """QPushButton {
-        border: 1px solid #%s;
-        border-radius: %spx;
-        background-color: #%s;
-        font: %spx;
-        color: #%s
-        }""" % (cfg.get("Appearance", "color.grid"),
-                int(sf * 3),
-                cfg.get("Appearance", "color.grid"),
-                int(sf * 10),
-                cfg.get("Appearance", "color.background"))
+        dynamic_style = self.buttons_style % (cfg.get("Appearance", "color.grid"),
+                                              int(sf * 3),
+                                              cfg.get("Appearance", "color.grid"),
+                                              int(sf * 10),
+                                              cfg.get("Appearance", "color.background"))
         self.new_button.setStyleSheet(dynamic_style)
         self.undo_button.setStyleSheet(dynamic_style)
 
@@ -421,6 +411,7 @@ class Main(QtWidgets.QWidget):
         self.canvas = Canvas(self)
         self.show()
         if not self.matrix.save_loaded:
+            self.score = 0
             self.matrix.spawn()
 
     def keyPressEvent(self, event):
@@ -455,6 +446,8 @@ class Main(QtWidgets.QWidget):
                     self.update()
 
     def new_game(self):
+        self.previous_score = self.score
+        self.previous_matrix = self.matrix.backup()
         self.score = 0
         self.state = "playing"
         self.matrix.fill()
@@ -472,22 +465,22 @@ class Main(QtWidgets.QWidget):
             self.update()
 
     def resizeEvent(self, event):
-        ns = event.size()
+        new_size = event.size()
         ar = float(cfg.get("Appearance", "aspect.ratio"))
-        if ns.width() != event.oldSize().width():
-            nw = ns.width()
-            nh = int(nw / ar)
-            if nh > ns.height():
-                nh = ns.height()
-                nw = int(nh * ar)
+        if new_size.width() != event.oldSize().width():
+            new_width = new_size.width()
+            new_height = int(new_width / ar)
+            if new_height > new_size.height():
+                new_height = new_size.height()
+                new_width = int(new_height * ar)
         else:
-            nh = ns.height()
-            nw = int(nh * ar)
-            if nw > ns.width():
-                nw = ns.width()
-                nh = int(nw / ar)
-        self.canvas.resize(nw, nh)
-        self.canvas.move(int((self.width() - nw) / 2), int((self.height() - nh) / 2))
+            new_height = new_size.height()
+            new_width = int(new_height * ar)
+            if new_width > new_size.width():
+                new_width = new_size.width()
+                new_height = int(new_width / ar)
+        self.canvas.resize(new_width, new_height)
+        self.canvas.move(int((self.width() - new_width) / 2), int((self.height() - new_height) / 2))
 
     def closeEvent(self, event):
         data = []
